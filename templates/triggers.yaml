@@ -1,0 +1,114 @@
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups: []
+    ParameterLabels: {}
+Outputs:
+  ProjectAuthApiCredentialsSecretId:
+    Description: The ID of the Secret containing API credentials
+    Export:
+      Name: !Sub '${AWS::StackName}-api-credentials-secret-id'
+    Value: !Ref 'ProjectAuthApiCredentialsSecret'
+  ProjectAuthPreSignupTriggerFunctionArn:
+    Description: The Arn of the Pre-signup trigger Lambda function
+    Export:
+      Name: !Sub '${AWS::StackName}-pre-signup-trigger-function-arn'
+    Value: !GetAtt 'ProjectAuthPreSignupTriggerFunction.Arn'
+  ProjectAuthUserMigrationTriggerFunctionArn:
+    Description: The Arn of the User Migration Trigger Lambda function
+    Export:
+      Name: !Sub '${AWS::StackName}-user-migration-trigger-function-arn'
+    Value: !GetAtt 'ProjectAuthMigrationTriggerFunction.Arn'
+Parameters:
+  ProjectAuthAuth0ClientIdParameter:
+    Description: The client ID of the Auth0 application to use as a source for user logins and queries
+    Type: String
+  ProjectAuthAuth0ClientSecretParameter:
+    Description: The client secret of the Auth0 application to use as a source for user logins and queries
+    NoEcho: true
+    Type: String
+  ProjectAuthAuth0DomainParameter:
+    Default: hms-dbmi.auth0.com
+    Description: The domain of the Auth0 tenant to make requests to
+    Type: String
+  ProjectAuthPreSignupTriggerImageParameter:
+    Description: The image to be used for pre-signup trigger function
+    Type: String
+  ProjectAuthUserMigrationTriggerImageParameter:
+    Description: The image to be used for user migration trigger function
+    Type: String
+Resources:
+  ProjectAuthApiCredentialsSecret:
+    Properties:
+      Name: /hms/dbmi/auth0-to-cognito/auth0
+      SecretString: !Sub "{\n                \"domain\":\"${ProjectAuthAuth0DomainParameter}\",\n                \"client_id\":\"${ProjectAuthAuth0ClientIdParameter}\",\n                \"client_secret\"\
+        :\"${ProjectAuthAuth0ClientSecretParameter}\"\n            }"
+    Type: AWS::SecretsManager::Secret
+  ProjectAuthMigrationTriggerFunction:
+    Properties:
+      Architectures:
+        - x86_64
+      Code:
+        ImageUri: !Ref 'ProjectAuthUserMigrationTriggerImageParameter'
+      Environment:
+        Variables:
+          AUTH_API_CREDENTIALS_SECRET_ID: !Ref 'ProjectAuthApiCredentialsSecret'
+      FunctionName: !Sub '${AWS::StackName}-migration-trigger-function'
+      ImageConfig:
+        Command:
+          - index.lambda_handler
+      MemorySize: 256
+      PackageType: Image
+      Role: !GetAtt 'ProjectAuthMigrationTriggerRole.Arn'
+      Timeout: 60
+    Type: AWS::Lambda::Function
+  ProjectAuthMigrationTriggerRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - secretsmanager:GetSecretValue
+                Effect: Allow
+                Resource: !Ref 'ProjectAuthApiCredentialsSecret'
+          PolicyName: !Sub '${AWS::StackName}-migration-trigger-secretsmanager-policy'
+    Type: AWS::IAM::Role
+  ProjectAuthPreSignupTriggerFunction:
+    Properties:
+      Architectures:
+        - x86_64
+      Code:
+        ImageUri: !Ref 'ProjectAuthPreSignupTriggerImageParameter'
+      FunctionName: !Sub '${AWS::StackName}-pre-signup-trigger-function'
+      ImageConfig:
+        Command:
+          - index.lambda_handler
+      MemorySize: 256
+      PackageType: Image
+      Role: !GetAtt 'ProjectAuthPreSignupTriggerRole.Arn'
+      Timeout: 60
+    Type: AWS::Lambda::Function
+  ProjectAuthPreSignupTriggerRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Path: /
+    Type: AWS::IAM::Role
