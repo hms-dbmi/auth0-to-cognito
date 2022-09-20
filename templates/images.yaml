@@ -205,15 +205,15 @@ Resources:
           - Name: AWS_ACCOUNT_ID
             Type: PLAINTEXT
             Value: !Ref 'AWS::AccountId'
-          - Name: IMAGE_REPO_NAME
+          - Name: IMAGE_NAME
             Type: PLAINTEXT
-            Value: !Ref 'ProjectAuthRepository'
+            Value: !GetAtt 'ProjectAuthRepository.RepositoryUri'
           - Name: IMAGE_TAG
             Type: PLAINTEXT
             Value: pre-signup
           - Name: FUNCTION_FILENAME
             Type: PLAINTEXT
-            Value: pre-signup-trigger.py
+            Value: pre_signup_trigger.py
         Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
         PrivilegedMode: true
         Type: LINUX_CONTAINER
@@ -331,15 +331,15 @@ Resources:
           - Name: AWS_ACCOUNT_ID
             Type: PLAINTEXT
             Value: !Ref 'AWS::AccountId'
-          - Name: IMAGE_REPO_NAME
+          - Name: IMAGE_NAME
             Type: PLAINTEXT
-            Value: !Ref 'ProjectAuthRepository'
+            Value: !GetAtt 'ProjectAuthRepository.RepositoryUri'
           - Name: IMAGE_TAG
             Type: PLAINTEXT
             Value: user-migration
           - Name: FUNCTION_FILENAME
             Type: PLAINTEXT
-            Value: user-migration-trigger.py
+            Value: user_migration_trigger.py
         Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
         PrivilegedMode: true
         Type: LINUX_CONTAINER
