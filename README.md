@@ -40,23 +40,14 @@ The response should include an access token as well as scope set to 'read:users'
 ```
 ### b. CloudFormation
 
-Create a stack using the included CloudFormation template to create the resources for the Cognito trigger. This stack creates the Lambda function, the IAM role for the function as well as the invocation permission that allows Cognito to execute the function as needed. Also created is a secret to store your previously prepared Auth0 application client ID and client secret.
+If using AWS ECR to host images, create a stack using the `templates/images.yaml` template to build and push images for each specified trigger to an ECR automatically.
+
+Create a stack using the included `templates/triggers.yaml` CloudFormation template to create the resources for the Cognito triggers. This stack creates the Lambda function, the IAM role for the function as well as the invocation permission that allows Cognito to execute the function as needed. Also created is a secret to store your previously prepared Auth0 application client ID and client secret.
 
 
 ### c. Cognito
 
-Once the stack is created we still have a few remaining tasks:
-
-1. Build the Lambda function's source using the `build.sh` script in this repository. Once run, a file `user-migration-trigger.zip` will be created. Upload that as the Lambda's source using the AWS Console.
-2. Add your applications credentials to the created secret in Secrets Manager. An object was created with placeholders for the necessary values but the plaintext object should look like:
-```
-{
-    "domain":"hms-dbmi.auth0.com",
-    "client_id":"YOUR_CLIENT_ID",
-    "client_secret":"YOUR_CLIENT_SECRET"
-}
-```
-3. We now need to add the created Lambda function as the trigger for the Cognito User Pool.
+We now need to add the created Lambda function as the trigger for the Cognito User Pool.
     1. Select your User Pool in the AWS Cognito console
     2. Select 'User Pool Properties'
     3. Select 'Add Lambda Trigger'
