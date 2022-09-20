@@ -1,0 +1,422 @@
+Conditions:
+  ProjectAuthCodebuildArtifactsBucketCondition: !Equals
+    - !Ref 'ProjectAuthCodebuildArtifactsBucketNameParameter'
+    - ''
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups: []
+    ParameterLabels: {}
+Outputs:
+  ProjectAuthApiCredentialsSecretId:
+    Description: The ID of the Secret containing API credentials
+    Export:
+      Name: !Sub '${AWS::StackName}-api-credentials-secret-id'
+    Value: !Ref 'ProjectAuthApiCredentialsSecret'
+  ProjectAuthPreSignupTriggerFunctionArn:
+    Description: The Arn of the Pre-signup trigger Lambda function
+    Export:
+      Name: !Sub '${AWS::StackName}-pre-signup-trigger-function-arn'
+    Value: !GetAtt 'ProjectAuthPreSignupTriggerFunction.Arn'
+  ProjectAuthUserMigrationTriggerFunctionArn:
+    Description: The Arn of the User Migration Trigger Lambda function
+    Export:
+      Name: !Sub '${AWS::StackName}-user-migration-trigger-function-arn'
+    Value: !GetAtt 'ProjectAuthMigrationTriggerFunction.Arn'
+Parameters:
+  ProjectAuthAuth0ClientIdParameter:
+    Description: The client ID of the Auth0 application to use as a source for user logins and queries
+    Type: String
+  ProjectAuthAuth0ClientSecretParameter:
+    Description: The client secret of the Auth0 application to use as a source for user logins and queries
+    NoEcho: true
+    Type: String
+  ProjectAuthAuth0DomainParameter:
+    Default: hms-dbmi.auth0.com
+    Description: The domain of the Auth0 tenant to make requests to
+    Type: String
+  ProjectAuthCodebuildArtifactsBucketNameParameter:
+    Default: ''
+    Description: The name of the bucket to use for storing CodeBuild artifacts. If none specified, a bucket will be created.
+    Type: String
+  ProjectAuthSourceAccountParameter:
+    Default: hms-dbmi
+    Description: The name of the account containing the repository to build from
+    Type: String
+  ProjectAuthSourceBranchParameter:
+    Default: master
+    Description: The name of the repository branch to build from
+    Type: String
+  ProjectAuthSourceRepositoryParameter:
+    Default: auth0-to-cognito
+    Description: The name of the repository to build from
+    Type: String
+Resources:
+  ProjectAuthApiCredentialsSecret:
+    Properties:
+      Name: '/hms/dbmi/auth0-to-cognito/auth0'
+      SecretString: !Sub "{\n                \"domain\":\"${ProjectAuthAuth0DomainParameter}\",\n                \"client_id\":\"${ProjectAuthAuth0ClientIdParameter}\",\n                \"client_secret\"\
+        :\"${ProjectAuthAuth0ClientSecretParameter}\"\n            }"
+    Type: AWS::SecretsManager::Secret
+  ProjectAuthArtifactsBucket:
+    Condition: ProjectAuthCodebuildArtifactsBucketCondition
+    DeletionPolicy: Delete
+    Properties:
+      AccessControl: Private
+      BucketName: !Join
+        - '-'
+        - - !Sub '${AWS::StackName}-codepipeline-artifacts'
+          - !Select
+            - 0
+            - !Split
+              - '-'
+              - !Select
+                - 2
+                - !Split
+                  - /
+                  - !Ref 'AWS::StackId'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+    Type: AWS::S3::Bucket
+  ProjectAuthCodepipelineRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+                  - s3:GetObjectVersioning
+                Effect: Allow
+                Resource: !If
+                  - ProjectAuthCodebuildArtifactsBucketCondition
+                  - !Sub 'arn:aws:s3:::${ProjectAuthArtifactsBucket}/*'
+                  - !Sub 'arn:aws:s3:::${ProjectAuthCodebuildArtifactsBucketNameParameter}/*'
+            Version: '2012-10-17'
+          PolicyName: !Sub '${AWS::StackName}-codepipeline-s3-policy'
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetAuthorizationToken
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Effect: Allow
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectAuthRepository}*'
+            Version: '2012-10-17'
+          PolicyName: !Sub '${AWS::StackName}-codebuild-ecr-policy'
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - codebuild:BatchGetBuilds
+                  - codebuild:StartBuild
+                Effect: Allow
+                Resource: '*'
+            Version: '2012-10-17'
+          PolicyName: !Sub '${AWS::StackName}-codepipeline-codebuild-policy'
+      RoleName: !Sub '${AWS::StackName}-codepipeline-role'
+    Type: AWS::IAM::Role
+  ProjectAuthMigrationTriggerFunction:
+    Properties:
+      Code:
+        ImageUri: !Join
+          - ':'
+          - - !GetAtt 'ProjectAuthRepository.RepositoryUri'
+            - user-migration
+      Environment:
+        Variables:
+          AUTH_API_CREDENTIALS_SECRET_ID: !Ref 'ProjectAuthApiCredentialsSecret'
+      FunctionName: !Sub '${AWS::StackName}-migration-trigger-function'
+      Handler: index.lambda_handler
+      ImageConfig:
+        Command:
+          - index.lambda_handler
+      MemorySize: 256
+      Role: !GetAtt 'ProjectAuthMigrationTriggerRole.Arn'
+      Runtime: python3.9
+      Timeout: 60
+    Type: AWS::Lambda::Function
+  ProjectAuthMigrationTriggerRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - secretsmanager:GetSecretValue
+                Effect: Allow
+                Resource: !Ref 'ProjectAuthApiCredentialsSecret'
+          PolicyName: !Sub '${AWS::StackName}-migration-trigger-secretsmanager-policy'
+    Type: AWS::IAM::Role
+  ProjectAuthPipeline:
+    DependsOn:
+      - ProjectAuthRepository
+    Properties:
+      ArtifactStores:
+        - ArtifactStore:
+            Location: !If
+              - ProjectAuthCodebuildArtifactsBucketCondition
+              - !Ref 'ProjectAuthArtifactsBucket'
+              - !Ref 'ProjectAuthCodebuildArtifactsBucketNameParameter'
+            Type: S3
+          Region: !Ref 'AWS::Region'
+      Name: !Sub '${AWS::StackName}'
+      RoleArn: !GetAtt 'ProjectAuthCodepipelineRole.Arn'
+      Stages:
+        - Actions:
+            - ActionTypeId:
+                Category: Source
+                Owner: ThirdParty
+                Provider: GitHub
+                Version: '1'
+              Configuration:
+                Branch: !Ref 'ProjectAuthSourceBranchParameter'
+                Owner: !Ref 'ProjectAuthSourceAccountParameter'
+                Repo: !Ref 'ProjectAuthSourceRepositoryParameter'
+              Name: SourceAction
+              OutputArtifacts:
+                - Name: !Sub '${AWS::StackName}-source-artifacts'
+              RunOrder: 1
+          Name: Source
+        - Actions:
+            - ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref 'ProjectAuthUserMigrationTriggerProject'
+              InputArtifacts:
+                - Name: !Sub '${AWS::StackName}-source-artifacts'
+              Name: CodeBuild
+              OutputArtifacts:
+                - Name: !Sub '${AWS::StackName}-build-artifacts'
+              RunOrder: 1
+          Name: Build User Migration Trigger
+        - Actions:
+            - ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref 'ProjectAuthPreSignupTriggerProject'
+              InputArtifacts:
+                - Name: !Sub '${AWS::StackName}-source-artifacts'
+              Name: CodeBuild
+              OutputArtifacts:
+                - Name: !Sub '${AWS::StackName}-build-artifacts'
+              RunOrder: 1
+          Name: Build Pre-Signup Trigger
+    Type: AWS::CodePipeline::Pipeline
+  ProjectAuthPreSignupTriggerFunction:
+    Properties:
+      Code:
+        ImageUri: !Join
+          - ':'
+          - - !GetAtt 'ProjectAuthRepository.RepositoryUri'
+            - pre-signup
+      FunctionName: !Sub '${AWS::StackName}-pre-signup-trigger-function'
+      Handler: index.lambda_handler
+      ImageConfig:
+        Command:
+          - index.lambda_handler
+      MemorySize: 256
+      Role: !GetAtt 'ProjectAuthPreSignupTriggerRole.Arn'
+      Runtime: python3.9
+      Timeout: 60
+    Type: AWS::Lambda::Function
+  ProjectAuthPreSignupTriggerProject:
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Cache:
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+        Type: LOCAL
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Type: PLAINTEXT
+            Value: !Ref 'AWS::Region'
+          - Name: AWS_ACCOUNT_ID
+            Type: PLAINTEXT
+            Value: !Ref 'AWS::AccountId'
+          - Name: IMAGE_REPO_NAME
+            Type: PLAINTEXT
+            Value: !Ref 'ProjectAuthRepository'
+          - Name: IMAGE_TAG
+            Type: PLAINTEXT
+            Value: pre-signup
+          - Name: FUNCTION_FILENAME
+            Type: PLAINTEXT
+            Value: pre-signup-trigger.py
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        PrivilegedMode: true
+        Type: LINUX_CONTAINER
+      Name: !Sub '${AWS::StackName}-pre-signup-trigger-project'
+      ServiceRole: !Ref 'ProjectAuthProjectRole'
+      Source:
+        Type: CODEPIPELINE
+    Type: AWS::CodeBuild::Project
+  ProjectAuthPreSignupTriggerRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Path: /
+    Type: AWS::IAM::Role
+  ProjectAuthProjectRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Action:
+              - sts:AssumeRole
+            Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+        Version: '2012-10-17'
+      Path: /
+      Policies:
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - ecr:GetAuthorizationToken
+                Effect: Allow
+                Resource: '*'
+            Version: '2012-10-17'
+          PolicyName: !Sub '${AWS::StackName}-codebuild-ecr-token-policy'
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetObjectVersion
+                Effect: Allow
+                Resource: !If
+                  - ProjectAuthCodebuildArtifactsBucketCondition
+                  - !Sub 'arn:aws:s3:::${ProjectAuthArtifactsBucket}/*'
+                  - !Sub 'arn:aws:s3:::${ProjectAuthCodebuildArtifactsBucketNameParameter}/*'
+            Version: '2012-10-17'
+          PolicyName: !Sub '${AWS::StackName}-codebuild-s3-policy'
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Effect: Allow
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+            Version: '2012-10-17'
+          PolicyName: !Sub '${AWS::StackName}-codebuild-cloudwatch-policy'
+        - PolicyDocument:
+            Statement:
+              - Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:GetAuthorizationToken
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                Effect: Allow
+                Resource: !Sub 'arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${ProjectAuthRepository}*'
+            Version: '2012-10-17'
+          PolicyName: !Sub '${AWS::StackName}-codebuild-ecr-policy'
+    Type: AWS::IAM::Role
+  ProjectAuthRepository:
+    Properties:
+      LifecyclePolicy:
+        LifecyclePolicyText: "\n                {\n                    \"rules\": [\n                        {\n                            \"rulePriority\": 1,\n                            \"description\"\
+          : \"Expire untagged images older than 3 days\",\n                            \"selection\": {\n                                \"tagStatus\": \"untagged\",\n                                \"\
+          countType\": \"sinceImagePushed\",\n                                \"countUnit\": \"days\",\n                                \"countNumber\": 3\n                            },\n             \
+          \               \"action\": { \"type\": \"expire\" }\n                        }\n                    ]\n                }\n                "
+      RepositoryName: !Sub '${AWS::StackName}-trigger'
+      RepositoryPolicyText:
+        Statement:
+          - Action:
+              - ecr:GetDownloadUrlForLayer
+              - ecr:BatchGetImage
+              - ecr:BatchCheckLayerAvailability
+              - ecr:PutImage
+              - ecr:InitiateLayerUpload
+              - ecr:UploadLayerPart
+              - ecr:CompleteLayerUpload
+            Effect: Allow
+            Principal:
+              AWS:
+                - !Join
+                  - ''
+                  - - 'arn:aws:iam::'
+                    - !Ref 'AWS::AccountId'
+                    - :root
+            Sid: AllowPushPull
+        Version: '2012-10-17'
+    Type: AWS::ECR::Repository
+  ProjectAuthUserMigrationTriggerProject:
+    Properties:
+      Artifacts:
+        Type: CODEPIPELINE
+      Cache:
+        Modes:
+          - LOCAL_DOCKER_LAYER_CACHE
+        Type: LOCAL
+      Environment:
+        ComputeType: BUILD_GENERAL1_MEDIUM
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Type: PLAINTEXT
+            Value: !Ref 'AWS::Region'
+          - Name: AWS_ACCOUNT_ID
+            Type: PLAINTEXT
+            Value: !Ref 'AWS::AccountId'
+          - Name: IMAGE_REPO_NAME
+            Type: PLAINTEXT
+            Value: !Ref 'ProjectAuthRepository'
+          - Name: IMAGE_TAG
+            Type: PLAINTEXT
+            Value: user-migration
+          - Name: FUNCTION_FILENAME
+            Type: PLAINTEXT
+            Value: user-migration-trigger.py
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:3.0
+        PrivilegedMode: true
+        Type: LINUX_CONTAINER
+      Name: !Sub '${AWS::StackName}-user-migratrion-trigger-project'
+      ServiceRole: !Ref 'ProjectAuthProjectRole'
+      Source:
+        Type: CODEPIPELINE
+    Type: AWS::CodeBuild::Project
